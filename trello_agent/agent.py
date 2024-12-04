@@ -32,7 +32,7 @@ class TrelloAgent:
         self.token = os.getenv('TRELLO_TOKEN')
         
         if not self.api_key or not self.token:
-            raise ValueError("Missing Trello API credentials. Please set TRELLO_API_KEY and TRELLO_TOKEN in .env file")
+            raise ValueError("Missing API credentials. have a look at env file =)")
         
         self.client = TrelloClient(
             api_key=self.api_key,
@@ -41,14 +41,27 @@ class TrelloAgent:
             token_secret=None  
         )
         
-        self.llm = ChatOpenAI(temperature=0)
+        self.llm = ChatOpenAI(
+            temperature=0,
+            model="gpt-4o-mini",  # feel free to change
+            model_kwargs={"top_p": 0.9}  
+        )
         self.parser = PydanticOutputParser(pydantic_object=TrelloBoard)
         
         template = """Create a Trello board structure for this project description:
 {project_description}
 
-Create a board with these lists: Backlog, To Do, In Progress, Review, Done.
-Break down the project into specific, actionable tasks.
+Create a board with these lists in order:
+1. Backlog: Place all initial tasks and future enhancements here
+2. To Do: Only include immediate, ready-to-start tasks
+3. In Progress: Leave empty (for tasks that are being worked on)
+4. Review: Leave empty (for tasks pending review)
+5. Done: Leave empty (for completed tasks)
+
+Break down the project into specific, actionable tasks and place them in either Backlog or To Do.
+Place larger, future tasks in Backlog.
+Place smaller, immediate tasks in To Do.
+Leave other lists empty as they will be used during project execution.
 Add relevant labels to categorize tasks (e.g., feature, bug, docs).
 
 {format_instructions}"""
@@ -68,9 +81,11 @@ Add relevant labels to categorize tasks (e.g., feature, bug, docs).
                 prompt_value = self.prompt.format(project_description=project_description)
                 board_structure = self.parser.parse(self.llm.invoke(prompt_value).content)
                 
+                #board creation
                 board = self.client.add_board(
                     board_name=board_structure.name,
-                    permission_level='private' 
+                    permission_level='private',
+                    default_lists=False  
                 )
                 
                 board.set_description(board_structure.description)
@@ -88,12 +103,18 @@ Add relevant labels to categorize tasks (e.g., feature, bug, docs).
                         )
                         
                         if card_info.labels:
+                            added_labels = set()  
                             for label_name in card_info.labels:
-                                label_color = label_name if label_name in label_colors else 'blue'
-                                if label_color not in labels:
-                                    labels[label_color] = board.add_label(label_name, label_color)
-                                card.add_label(labels[label_color])
-                        
+                                if label_name not in added_labels:  
+                                    label_color = label_name if label_name in label_colors else 'blue'
+                                    if label_color not in labels:
+                                        labels[label_color] = board.add_label(label_name, label_color)
+                                    try:
+                                        card.add_label(labels[label_color])
+                                        added_labels.add(label_name)
+                                    except Exception as e:
+                                        if "already on the card" not in str(e):
+                                            raise
                         if card_info.members:
                             for member_id in card_info.members:
                                 card.add_member(member_id)
@@ -125,5 +146,5 @@ Add relevant labels to categorize tasks (e.g., feature, bug, docs).
             boards = self.client.list_boards()
             return [{'id': board.id, 'name': board.name, 'url': board.url} for board in boards]
         except Exception as e:
-            print("Note: Unable to list boards. This doesn't affect board creation.")
+            print("note: no boards listed. this isn't an issue. just a side effect of the trello api")
             return []
